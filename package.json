@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "devDependencies": {
+    "aasvg": "0.4.3"
+  }
+}
