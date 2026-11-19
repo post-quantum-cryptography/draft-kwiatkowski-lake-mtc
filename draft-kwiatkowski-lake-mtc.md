@@ -17,6 +17,8 @@ keyword:
  - PKI
  - MTC
  - post-quantum
+ - IoT
+
 venue:
   group: "Lightweight Authenticated Key Exchange"
   type: "Working Group"
