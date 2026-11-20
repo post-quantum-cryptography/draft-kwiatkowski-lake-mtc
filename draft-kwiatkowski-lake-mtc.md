@@ -30,8 +30,14 @@ venue:
 author:
   - ins: K. Kwiatkowski
     name: Krzysztof Kwiatkowski
-    organization: PQShield
+    org: PQShield
     email: kris@amongbytes.com
+    country: United Kingdom
+  - ins: S. Raza
+    name: Shahid Raza
+    org: University of Glasgow
+    email: shahid.raza@glasgow.ac.uk
+    country: United Kingdom
 
 normative:
   RFC9528:
