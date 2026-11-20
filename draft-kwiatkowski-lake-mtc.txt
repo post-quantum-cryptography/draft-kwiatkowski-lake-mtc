@@ -4,8 +4,9 @@
 
 LAKE Working Group                                        K. Kwiatkowski
 Internet-Draft                                                  PQShield
-Intended status: Standards Track                        19 November 2026
-Expires: 23 May 2027
+Intended status: Standards Track                                 S. Raza
+Expires: 24 May 2027                               University of Glasgow
+                                                        20 November 2026
 
 
                    Merkle Tree Certificates for LAKE
@@ -62,7 +63,7 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 23 May 2027.
+   This Internet-Draft will expire on 24 May 2027.
 
 Copyright Notice
 
@@ -94,7 +95,7 @@ Table of Contents
    7.  References
      7.1.  Normative References
      7.2.  Informative References
-   Author's Address
+   Authors' Addresses
 
 1.  Introduction
 
@@ -556,8 +557,15 @@ Table of Contents
               DOI 10.17487/RFC9338, December 2022,
               <https://www.rfc-editor.org/rfc/rfc9338>.
 
-Author's Address
+Authors' Addresses
 
    Krzysztof Kwiatkowski
    PQShield
+   United Kingdom
    Email: kris@amongbytes.com
+
+
+   Shahid Raza
+   University of Glasgow
+   United Kingdom
+   Email: shahid.raza@glasgow.ac.uk
