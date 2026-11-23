@@ -1,0 +1,571 @@
+
+
+
+
+LAKE Working Group                                        K. Kwiatkowski
+Internet-Draft                                                  PQShield
+Intended status: Standards Track                                 S. Raza
+Expires: 27 May 2027                               University of Glasgow
+                                                        23 November 2026
+
+
+                   Merkle Tree Certificates for LAKE
+                   draft-kwiatkowski-lake-mtc-latest
+
+Abstract
+
+   Merkle Tree Certificates (MTC) replace the signature of a
+   Certification Authority (CA) with smaller inclusion proof against a
+   periodically published landmark.  The large sizes of post-quantum
+   (PQC) keys and signatures make conventional certificate chains costly
+   to validate on constrained devices, which have limited memory,
+   compute, and message-size budgets.  MTC's lightweight properties keep
+   certificate verification practical for such devices even when PQC
+   signature algorithms are used.
+
+   This document specifies how to carry MTC credentials in the
+   Lightweight Authenticated Key Exchange (LAKE) protocol [RFC9528]:
+   CBOR encodings of MTC certificates and landmarks, and a new External
+   Authorization Data (EAD) item that lets the two peers negotiate, per
+   message, between the compact landmark-relative form of a certificate
+   and its self-contained standalone form.
+
+About This Document
+
+   This note is to be removed before publishing as an RFC.
+
+   The latest revision of this draft can be found at .  Status
+   information for this document may be found at
+   https://datatracker.ietf.org/doc/draft-kwiatkowski-lake-mtc/.
+
+   Discussion of this document takes place on the Lightweight
+   Authenticated Key Exchange Working Group mailing list
+   (mailto:lake@ietf.org), which is archived at
+   https://mailarchive.ietf.org/arch/browse/lake/.  Subscribe at
+   https://www.ietf.org/mailman/listinfo/lake/.
+
+   Source for this draft and an issue tracker can be found at
+   https://github.com/post-quantum-cryptography/draft-kwiatkowski-lake-
+   mtc.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 27 May 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction
+   2.  Motivation
+   3.  Terminology
+   4.  Design
+     4.1.  CBOR Encoding of Certificates and Landmarks
+     4.2.  Landmark Negotiation in LAKE
+     4.3.  Landmark Synchronisation
+   5.  Security Considerations
+     5.1.  Exposure of the Landmark State Item
+     5.2.  Landmark Cache Rollback Protection
+   6.  IANA Considerations
+   7.  References
+     7.1.  Normative References
+     7.2.  Informative References
+   Authors' Addresses
+
+1.  Introduction
+
+   Merkle Tree Certificates (MTC) [I-D.ietf-plants-merkle-tree-certs]
+   change the way a Certification Authority (CA) vouches for the
+   certificates it issues.  Instead of signing every certificate
+   individually, as in a conventional PKI, an MTC CA appends each
+   certificate it issues to an issuance log, which is a Merkle tree in
+   the style of Certificate Transparency [RFC9162].  At regular
+   intervals, the CA designates the current tree size as a landmark and
+   publishes the hashes of the subtrees that cover the log up to that
+   size; a set of cosigners checks that the log has only grown and signs
+   these subtree hashes.  A certificate then carries an inclusion proof
+   in the place of the CA signature: the proof lists the sibling hashes
+   along the path from the certificate's leaf up to a subtree root
+   covered by a landmark, and the relying party recomputes this path and
+   compares the result against a landmark it already trusts.
+
+   This construction is attractive for devices described in the taxonomy
+   of [RFC7228], because it replaces the CA signature, which grows large
+   with post-quantum signature algorithms such as ML-DSA
+   [NIST-FIPS-204], with an inclusion proof whose size grows only with
+   the logarithm of the number of certificates in the log.  A landmark-
+   relative certificate for a log of a million entries carries about
+   twenty 32-byte hashes, and verifying it costs only a few SHA-256
+   computations, which even a class 1 device performs quickly.
+
+   The Lightweight Authenticated Key Exchange (LAKE) protocol [RFC9528]
+   is a lightweight authenticated key exchange protocol designed for
+   constrained devices and networks.  This document specifies how to
+   carry MTC credentials in LAKE: how a certificate is encoded, and a
+   new External Authorization Data (EAD) item that lets the two peers
+   negotiate, for each message, whether the compact landmark-relative
+   form of a certificate or its self-contained standalone form is sent.
+   This negotiation lets a device keep presenting the smallest
+   certificate form its peer can verify, without assuming that the peer
+   already holds the same landmarks, while every verifier remains able
+   to fall back to the standalone form that any relying party can check.
+
+2.  Motivation
+
+   None of the three post-quantum signature algorithms standardized by
+   the US National Institute of Standards and Technology (NIST) keeps
+   certificate chains within the message sizes and link budgets that
+   LAKE and the networks beneath it are designed for without a trade-
+   off.  FN-DSA keeps the smallest signatures of the three, but even its
+   smallest variant remains far larger than the pre-quantum signatures
+   it replaces, and reaching that size requires an implementation that
+   depends on carefully constructed Gaussian sampling, and a flawed
+   implementation can leak the signing key through side channels.
+
+   SLH-DSA sits at the opposite end: its security rests only on the
+   properties of its underlying hash function, which makes it the most
+   conservative choice, both from security and implementation
+   perspective, but its signatures run into the tens of kilobytes and
+   its signing is comparatively slow.  A conventional PKI must pick one
+   of these trade-offs and pay its cost on every certificate.
+
+   MTC decouples this choice from the cost paid by every certificate.
+   Because the CA and cosigners sign a landmark only once per interval
+   rather than once per certificate, this signature cost is amortised
+   across every certificate issued since the previous landmark: the CA
+   and each cosigner can pick whichever algorithm suits their own trade-
+   off between signature size, signing speed, and implementation risk,
+   including a conservative but large scheme such as SLH-DSA
+   [NIST-FIPS-205], without passing that cost on to every certificate a
+   device presents, which still carries only a small inclusion proof
+   regardless of which algorithm the CA and cosigners chose.
+
+   Because every certificate appears in a log that a set of independent
+   cosigners checks, the operator of a device fleet gains a means to
+   detect certificates that were issued without authorisation, a
+   property that a conventional PKI does not provide without additional
+   infrastructure such as Certificate Transparency.  MTC addresses only
+   the cost of verifying a peer's certificate.  A device's own
+   authentication signature in LAKE still depends on whichever algorithm
+   it holds a key for, with the memory, performance, and side-channel
+   costs that implementation entails
+   [I-D.ietf-pquip-pqc-hsm-constrained].  Realising these benefits for
+   devices that authenticate with LAKE requires certificate encodings
+   and a negotiation mechanism that fit within LAKE's credential
+   identifiers and EAD fields.
+
+3.  Terminology
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   This document uses the terms defined in
+   [I-D.ietf-plants-merkle-tree-certs], including _issuance log_,
+   _landmark_, _cosigner_, _inclusion proof_, _standalone certificate_,
+   and _landmark-relative certificate_. It also uses the device classes
+   defined in [RFC7228].  In addition, this document uses the following
+   terms:
+
+   Constrained device:  A device as characterized in [RFC7228],
+      participating in the LAKE exchange as the party that authenticates
+      with an MTC credential and that keeps a limited cache of
+      landmarks.
+
+   Server:  An online peer that a constrained device communicates with,
+      and which relays the device's certificate requests and landmark
+      updates to the MTC CA and its cosigners.
+
+   Landmark state:  The range of landmark numbers, for a given CA, that
+      a party holds in its cache, expressed as the oldest and newest
+      landmark number it has for that CA.
+
+   Update package:  A COSE_Sign1 structure, signed by the CA and
+      countersigned by its cosigners, that communicates one or more new
+      landmarks together with a consistency proof showing that the log
+      has only grown.
+
+   Update server:  The server that a device designates, in delegated
+      mode, to perform the MTC checks on its behalf and to supply it
+      with validated landmarks.
+
+   Delegated mode:  A landmark validation mode in which a device trusts
+      its designated update server to perform the MTC checks on new
+      landmarks, rather than performing them itself.
+
+   End-to-end mode:  A landmark validation mode in which a device
+      performs the MTC checks on new landmarks itself, and can accept
+      updates relayed by any peer.
+
+   Anchor:  The state a device stores to protect its landmark cache
+      against rollback, consisting of the number, tree size, and root
+      hash of the newest landmark it has validated.
+
+4.  Design
+
+   This document considers three parties: a constrained device, an
+   online server or gateway with which the device communicates, and an
+   MTC CA that records every certificate it issues in an issuance log
+   checked by a set of independent cosigners.  The device and the server
+   authenticate each other with certificates carried in LAKE messages
+   during key establishment.  The server relays the device's certificate
+   requests to the CA, stays current with the CA's landmarks, and
+   verifies the device's certificates with hashes rather than
+   signatures.
+
+   Solution uses CBOR signed and encoded certificate
+   ([I-D.ietf-cose-cbor-encoded-cert]).  The CA logs the CBOR TBS
+   structure itself, which requires a new issuance log entry type and
+   requires that the CA support it.
+
+4.1.  CBOR Encoding of Certificates and Landmarks
+
+   The inclusion proof is a CBOR array [RFC8949] containing the index
+   range of the subtree, the inclusion path as a sequence of 32-byte
+   hashes (when SHA-256 is used), and, for the standalone form, the
+   cosignatures over the subtree encoded as COSE_Sign1 signatures
+   [RFC9052].  The landmark-relative form omits the cosignatures.  Since
+   the certificate type and the algorithm code point already identify an
+   MTC credential, LAKE carries it with the existing credential
+   identifiers, c5c for C509 and x5chain for X.509 [RFC9528], and no new
+   ID_CRED parameter is needed.
+
+   A landmark is encoded as a CBOR array containing the CA identifier,
+   the landmark number, the tree size, and the subtree hashes that cover
+   the tree at that size.  The CA identifier reuses the trust anchor
+   identifier of the MTC CA [I-D.ietf-tls-trust-anchor-ids], encoded
+   with the CBOR tag for object identifiers [RFC9090].  Landmark numbers
+   are consecutive for a given CA identifier, so the pair formed by the
+   CA identifier and the landmark number designates a landmark
+   compactly.
+
+   Landmarks reach devices in update packages.  An update package is a
+   COSE_Sign1 object in which the CA signs the previous and new tree
+   sizes, the new landmarks, and a consistency proof showing that the
+   new tree size extends the old one, that is each cosigner adds a COSE
+   countersignature [RFC9338].  An update package is therefore self-
+   authenticating, and any party may relay it.
+
+4.2.  Landmark Negotiation in LAKE
+
+   LAKE lets applications attach data to each of its messages through
+   External Authorization Data (EAD) fields [RFC9528].  An EAD field is
+   a sequence of items, each made of an integer label and an optional
+   byte string value, and the sign of the label indicates to the
+   receiver whether the item is critical.  This document defines one new
+   item, called landmark state.  Its value is a CBOR array that lists,
+   for each CA that the sender trusts, the CA identifier together with
+   the oldest and newest landmark numbers it holds.  Because a verifier
+   keeps a contiguous range of landmarks per CA, this range describes
+   its whole cache in a few tens of bytes.
+
+   The initiator places its landmark state in EAD_1.  The responder
+   compares it with the landmark that covers its own certificate and
+   sends the landmark-relative form in message_2 when the initiator
+   holds that landmark, and the standalone form otherwise.  The
+   responder places its own landmark state in EAD_2, and the initiator
+   makes the same choice for message_3.  The following diagram
+   summarizes the exchange:
+
+   Initiator (device)                                 Responder (server)
+   |                                                                   |
+   | message_1: G_X, C_I, EAD_1: landmark state of I                   |
+   +------------------------------------------------------------------>|
+   |                                         chooses the form of MTC_R |
+   | message_2: G_Y, Enc(C_R, ID_CRED_R: MTC_R, Sig_R,                 |
+   |             EAD_2: landmark state of R, opt. package)             |
+   |<------------------------------------------------------------------+
+   | verifies MTC_R and Sig_R, chooses the form of MTC_I               |
+   | message_3: Enc(ID_CRED_I: MTC_I, Sig_I, EAD_3)                    |
+   +------------------------------------------------------------------>|
+   |                                          verifies MTC_I and Sig_I |
+   | message_4: Enc(EAD_4: update package)                             |
+   |<------------------------------------------------------------------+
+   | verifies the package, updates its landmark cache                  |
+
+                Figure 1: LAKE exchange with MTC credentials
+
+   The landmark state item is non-critical: a peer that does not
+   understand it ignores it, and the sender falls back to the standalone
+   form, which every verifier can check.  If a verifier nevertheless
+   receives a form it cannot verify, it MUST abort with a LAKE error,
+   and the initiator restarts the exchange with the standalone form.
+   Section 5.1 discusses the exposure of the landmark state item across
+   these messages.
+
+4.3.  Landmark Synchronisation
+
+   A device that verifies landmark-relative certificates MUST hold, for
+   each CA it trusts, the subtrees of every active landmark.  A landmark
+   remains active until every certificate it covers has expired, so a CA
+   that follows the allocation procedure of
+   [I-D.ietf-plants-merkle-tree-certs] keeps at most
+
+   W = ceil(T_cert / T_lm) + 1
+
+   landmarks active, where T_cert is the maximum certificate lifetime
+   and T_lm is the time between landmarks.  Next to its landmarks, a
+   device stores an anchor made of the number of its newest landmark
+   together with the tree size and root hash of the checkpoint against
+   which it last validated its cache; every later update MUST extend
+   this anchor.
+
+   How a device validates new landmarks depends on whom it trusts to
+   deliver them.  This document defines two validation modes:
+
+   Delegated mode:  The device designates one server, typically the
+      enrollment server of the organisation that operates the device, as
+      its update server.  This server performs the MTC checks and sends
+      the device only the number, tree size, and subtree hashes of each
+      new landmark, protected by OSCORE [RFC8613] or carried in EAD_4
+      once the server has authenticated.
+
+   End-to-end mode:  The device performs the MTC checks itself and can
+      accept updates relayed by any peer.  The update package then
+      carries a reference checkpoint at least as large as the newest
+      landmark, a consistency proof from the anchor to the reference
+      checkpoint, and the subtree hashes of each new landmark with a
+      subtree consistency proof towards the reference checkpoint.
+
+   An update proceeds in four steps: (1) the device, or its server,
+   detects that the cache lags behind, either because the landmark state
+   received in EAD_1 or EAD_2 is older than the peer's own, through a
+   CoAP Observe [RFC7641] notification on the landmark resource, or on a
+   schedule; (2) the device obtains the update package, either embedded
+   in EAD_4 of message_4 for small increments, or by fetching it from
+   the landmark resource of its designated update server for larger
+   catch-ups; (3) the device verifies the package according to its
+   validation mode; and (4) on success, the device commits the result by
+   writing the new landmarks into free storage, advancing its anchor in
+   a single atomic write, and then releasing the landmarks that have
+   left the active window.  A failure at any step leaves the device able
+   to authenticate with standalone certificates, and no failure undoes
+   state the device has already committed.
+
+   The anchor also protects the cache against rollback (see Section 5.2)
+   for the threat model this protects against and for the recovery mode
+   a device enters when that protection fails.
+
+   Many constrained devices have no reliable clock, yet landmarks carry
+   an expiration time and certificates carry a validity period.  Such a
+   device can still bound the age of a landmark by its number - that is,
+   because the CA allocates at most one landmark per interval, a
+   landmark at least W numbers older than the newest one the device
+   holds has certainly expired and can be discarded.  This bound only
+   advances when the device synchronises, and a device that stays
+   offline cannot tell how much time has passed and keeps treating its
+   last landmarks as active.
+
+   LAKE does not limit the size of EAD fields, so the practical limit on
+   message size comes from the transport and the link layer.  The
+   landmark state item fits in EAD_1 and adds little to message_1.  For
+   update packages, landmark hashes contribute only 32 bytes per
+   subtree, but each package carries at least two signatures, from the
+   CA and from one cosigner, and with a post-quantum signature algorithm
+   signatures size dominates the size of the package.  Implementations
+   SHOULD deliver large updates through the fetch mechanism described
+   above and reserve EAD_4 for small increments, and MAY batch several
+   landmarks into one update package to amortise the cost of its
+   signatures.
+
+5.  Security Considerations
+
+5.1.  Exposure of the Landmark State Item
+
+   The protection that LAKE affords to each message differs, and the
+   exposure of the landmark state item defined in Section 4.2 differs
+   with it.  EAD_1 travels in the clear, so an observer learns which CAs
+   the initiator trusts and how recent its cache is.  EAD_2 is encrypted
+   and covered by the responder's authentication, and EAD_3 and EAD_4
+   are fully protected.  An attacker who alters or removes the item in
+   EAD_1 cannot remain unnoticed, because message_1 enters the
+   transcript hash that both peers authenticate; the worst outcome of
+   such interference is a failed exchange or a fallback to the larger
+   standalone form.
+
+5.2.  Landmark Cache Rollback Protection
+
+   The anchor described in Section 4.3 protects a device's landmark
+   cache against rollback.
+
+   Network adversary:  It is the adversary LAKE is designed to resist.
+      An ordinary non-volatile storage suffices, because the device
+      accepts only packages whose landmark numbers continue from its
+      newest landmark and, in end-to-end mode, whose consistency proof
+      starts at its anchor.
+
+   An adversary with physical access or on-device code execution
+   ability:  The anchor needs to reside in storage that is authenticated
+      and rollback-resistant, such as a monotonic counter in a secure
+      element, a replay-protected memory block, or one-time-programmable
+      fuses.  Many class 1 devices offer none of these, and this
+      document does not assume that they do.
+
+   A device without rollback-resistant storage keeps its anchor in
+   ordinary flash, protected by a message authentication code under a
+   device key.  If the anchor is missing or fails this check, the device
+   MUST clear its landmark cache, accept only standalone certificates,
+   and announce no landmark state.  It leaves this recovery mode with
+   the first package that passes end-to-end verification against the
+   cosigner keys provisioned at manufacture, or with an update from its
+   designated server in delegated mode, adopting the reference
+   checkpoint of that package as its new anchor.
+
+6.  IANA Considerations
+
+   This document requests IANA to add one new item to the "LAKE External
+   Authorization Data Items" registry defined in Section 10.1 of
+   [RFC9528]:
+
+                +=======+================+===============+
+                | Label | Description    | Reference     |
+                +=======+================+===============+
+                | TBD1  | Landmark state | This document |
+                +-------+----------------+---------------+
+
+                                 Table 1
+
+   TBD1 is a label, consistent with the non-critical status of this item
+   specified in Section 4.2.
+
+7.  References
+
+7.1.  Normative References
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+   [RFC9528]  Selander, G., Preuß Mattsson, J., and F. Palombini,
+              "Ephemeral Diffie-Hellman Over COSE (EDHOC)", RFC 9528,
+              DOI 10.17487/RFC9528, March 2024,
+              <https://www.rfc-editor.org/rfc/rfc9528>.
+
+7.2.  Informative References
+
+   [I-D.ietf-cose-cbor-encoded-cert]
+              Mattsson, J. P., Selander, G., Raza, S., Höglund, J.,
+              Furuhed, M., and L. Liao, "CBOR Encoded X.509 Certificates
+              (C509 Certificates)", Work in Progress, Internet-Draft,
+              draft-ietf-cose-cbor-encoded-cert-21, 24 September 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-cose-
+              cbor-encoded-cert-21>.
+
+   [I-D.ietf-plants-merkle-tree-certs]
+              Benjamin, D., O'Brien, D., Westerbaan, B., Valenta, L.,
+              and F. Valsorda, "Merkle Tree Certificates", Work in
+              Progress, Internet-Draft, draft-ietf-plants-merkle-tree-
+              certs-08, 1 November 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-plants-
+              merkle-tree-certs-08>.
+
+   [I-D.ietf-pquip-pqc-hsm-constrained]
+              Reddy.K, T., Wing, D., S, B., and K. Kwiatkowski,
+              "Adapting Constrained Devices for Post-Quantum
+              Cryptography", Work in Progress, Internet-Draft, draft-
+              ietf-pquip-pqc-hsm-constrained-12, 15 November 2026,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-pquip-
+              pqc-hsm-constrained-12>.
+
+   [I-D.ietf-tls-trust-anchor-ids]
+              Beck, B., Benjamin, D., O'Brien, D., and K. Nekritz, "TLS
+              Trust Anchor Identifiers", Work in Progress, Internet-
+              Draft, draft-ietf-tls-trust-anchor-ids-07, 1 November
+              2026, <https://datatracker.ietf.org/doc/html/draft-ietf-
+              tls-trust-anchor-ids-07>.
+
+   [NIST-FIPS-204]
+              "Module-lattice-based digital signature standard",
+              National Institute of Standards and Technology (U.S.),
+              DOI 10.6028/nist.fips.204, August 2024,
+              <https://doi.org/10.6028/nist.fips.204>.
+
+   [NIST-FIPS-205]
+              "Stateless hash-based digital signature standard",
+              National Institute of Standards and Technology (U.S.),
+              DOI 10.6028/nist.fips.205, August 2024,
+              <https://doi.org/10.6028/nist.fips.205>.
+
+   [RFC7228]  Bormann, C., Ersue, M., and A. Keranen, "Terminology for
+              Constrained-Node Networks", RFC 7228,
+              DOI 10.17487/RFC7228, May 2014,
+              <https://www.rfc-editor.org/rfc/rfc7228>.
+
+   [RFC7641]  Hartke, K., "Observing Resources in the Constrained
+              Application Protocol (CoAP)", RFC 7641,
+              DOI 10.17487/RFC7641, September 2015,
+              <https://www.rfc-editor.org/rfc/rfc7641>.
+
+   [RFC8613]  Selander, G., Mattsson, J., Palombini, F., and L. Seitz,
+              "Object Security for Constrained RESTful Environments
+              (OSCORE)", RFC 8613, DOI 10.17487/RFC8613, July 2019,
+              <https://www.rfc-editor.org/rfc/rfc8613>.
+
+   [RFC8949]  Bormann, C. and P. Hoffman, "Concise Binary Object
+              Representation (CBOR)", STD 94, RFC 8949,
+              DOI 10.17487/RFC8949, December 2020,
+              <https://www.rfc-editor.org/rfc/rfc8949>.
+
+   [RFC9052]  Schaad, J., "CBOR Object Signing and Encryption (COSE):
+              Structures and Process", STD 96, RFC 9052,
+              DOI 10.17487/RFC9052, August 2022,
+              <https://www.rfc-editor.org/rfc/rfc9052>.
+
+   [RFC9090]  Bormann, C., "Concise Binary Object Representation (CBOR)
+              Tags for Object Identifiers", RFC 9090,
+              DOI 10.17487/RFC9090, July 2021,
+              <https://www.rfc-editor.org/rfc/rfc9090>.
+
+   [RFC9162]  Laurie, B., Messeri, E., and R. Stradling, "Certificate
+              Transparency Version 2.0", RFC 9162, DOI 10.17487/RFC9162,
+              December 2021, <https://www.rfc-editor.org/rfc/rfc9162>.
+
+   [RFC9338]  Schaad, J., "CBOR Object Signing and Encryption (COSE):
+              Countersignatures", STD 96, RFC 9338,
+              DOI 10.17487/RFC9338, December 2022,
+              <https://www.rfc-editor.org/rfc/rfc9338>.
+
+Authors' Addresses
+
+   Krzysztof Kwiatkowski
+   PQShield
+   United Kingdom
+   Email: kris@amongbytes.com
+
+
+   Shahid Raza
+   University of Glasgow
+   United Kingdom
+   Email: shahid.raza@glasgow.ac.uk
